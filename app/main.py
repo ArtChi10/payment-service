@@ -7,7 +7,7 @@ from app.api.v1.router import router as api_router
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.db.session import async_session_factory
-from app.messaging.broker import broker
+from app.messaging.broker import broker, declare_rabbitmq_topology
 from app.services.outbox import OutboxPublisher, run_outbox_loop
 
 configure_logging()
@@ -16,6 +16,7 @@ configure_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await broker.connect()
+    await declare_rabbitmq_topology()
     publisher = OutboxPublisher(async_session_factory, broker)
     outbox_task = asyncio.create_task(run_outbox_loop(publisher))
     try:

@@ -46,6 +46,12 @@ broker = RabbitBroker(settings.rabbitmq_url)
 
 
 async def declare_rabbitmq_topology() -> None:
+    """Declare durable RabbitMQ topology.
+
+    RabbitMQ declarations and bindings are idempotent when called with the same
+    parameters, so both API and consumer processes can safely call this on
+    startup.
+    """
     payments_exchange = await broker.declare_exchange(PAYMENTS_EXCHANGE)
     payments_queue = await broker.declare_queue(PAYMENTS_NEW_QUEUE)
     await payments_queue.bind(

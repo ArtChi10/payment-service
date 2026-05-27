@@ -74,7 +74,10 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
 
 ## RabbitMQ topology
 
-Consumer явно объявляет durable topology:
+API и consumer оба объявляют durable topology на старте. Это сделано намеренно:
+API запускает outbox publisher и может публиковать события до старта consumer, поэтому
+exchange, queues и bindings должны существовать уже в API-процессе. Повторное объявление
+безопасно, потому что RabbitMQ declarations идемпотентны при одинаковых параметрах.
 
 - main exchange: `payments`
 - main queue: `payments.new`
@@ -118,10 +121,21 @@ Webhook delivery отделен от RabbitMQ message retry. `WebhookService.sen
 `WebhookDeliveryError` пробрасывается наружу, и consumer передает ошибку в общий
 RabbitMQ retry/DLQ flow.
 
+Текущая семантика: webhook retry выполняется внутри каждой попытки обработки сообщения.
+Так как RabbitMQ message retry тоже делает до 3 попыток обработки, худший случай для
+недоступного webhook — до 9 HTTP-запросов на один платеж. Это осознанный компромисс
+текущей версии; production-вариант обычно выносит webhook delivery в отдельную outbox/queue
+с собственным budget и дедупликацией.
+
 ## Идемпотентность
 
 `payments.idempotency_key` уникален. Повторный `POST` с тем же `Idempotency-Key`
 возвращает уже созданный платеж и не создает второе событие outbox.
+
+При конкурентном создании второй запрос может столкнуться с unique constraint и после
+rollback повторно прочитать уже созданный платеж. Для production-grade PostgreSQL лучше
+заменить это на атомарный `INSERT ... ON CONFLICT`/upsert flow, чтобы не зависеть от
+короткого retry-read окна после `IntegrityError`.
 
 ## Миграции
 
@@ -159,3 +173,33 @@ docker compose config
 ```bash
 docker compose up --build
 ```
+
+Manual integration checklist:
+
+1. Запустить `docker compose up --build`.
+2. Проверить API: `curl http://localhost:8000/health`.
+3. Создать платеж через пример `POST /api/v1/payments`.
+4. Открыть RabbitMQ UI: `http://localhost:15672` (`guest` / `guest`).
+5. Проверить, что существуют `payments.new`, `payments.retry`, `payments.dlq`.
+6. Для DLQ-сценария искусственно сломать обработку или webhook и убедиться, что после
+   исчерпания message attempts сообщение попадает в `payments.dlq`.
+
+Автоматический integration test с настоящими PostgreSQL и RabbitMQ в этом репозитории не
+запускается по умолчанию, потому что требует внешних Docker-сервисов; сценарий выше
+оставлен как manual/optional проверка.
+
+## Operational notes
+
+Outbox events, которые исчерпали publish attempts, остаются в статусе `failed` для ручного
+расследования:
+
+```sql
+SELECT id, event_type, routing_key, attempts, created_at
+FROM outbox
+WHERE status = 'failed' AND attempts >= 3
+ORDER BY created_at;
+```
+
+Такие события нужно расследовать по логам и состоянию RabbitMQ. Повторная отправка может
+быть оформлена отдельной maintenance-командой в будущем; сейчас автоматический retry
+ограничен, чтобы бесконечно не гонять неисправные события.
