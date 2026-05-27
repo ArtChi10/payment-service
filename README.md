@@ -60,7 +60,9 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
 
 1. `POST /api/v1/payments` требует `X-API-Key` и `Idempotency-Key`.
 2. В одной транзакции создаются `payments.status=pending` и запись `outbox`.
-3. Фоновый outbox publisher читает неопубликованные события и публикует `payments.new`.
+3. Фоновый outbox publisher короткой транзакцией выбирает `pending`/retryable `failed`
+   события, публикует их в RabbitMQ вне DB-транзакции и отдельной короткой транзакцией
+   помечает успешные события как `published`.
 4. Consumer получает `payments.new`, эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%.
 5. Consumer обновляет статус платежа на `succeeded` или `failed`.
 6. Consumer отправляет webhook. Ошибки маршрутизируются в retry queue до 3 попыток
@@ -88,6 +90,23 @@ Consumer явно объявляет durable topology:
 обратно в exchange `payments` с routing key `payments.new`. Если обработка падает на 3-й
 попытке, handler делает `reject(requeue=False)`, после чего RabbitMQ перекладывает сообщение
 в durable очередь `payments.dlq`.
+
+## Outbox guarantees
+
+Outbox реализован как at-least-once delivery:
+
+- событие создается в той же DB-транзакции, что и платеж;
+- publish в RabbitMQ выполняется вне DB-транзакции, поэтому row lock не держится во время сетевого I/O;
+- после успешного publish событие отдельной транзакцией помечается `published`;
+- если publish падает, `attempts` увеличивается, а событие остается в статусе `failed`;
+- `pending` и `failed` события с `attempts < 3` повторно подхватываются publisher'ом;
+- `failed` события с исчерпанными attempts остаются в БД и требуют ручного расследования/alerting.
+
+Гарантия не является exactly-once. Если publish прошел успешно, но сервис упал до отметки
+`published`, событие может быть опубликовано повторно. Consumer поэтому должен быть
+идемпотентным: если `payment.processed_at` уже заполнен, gateway processing повторно не
+запускается. Webhook на повторном `payments.new` сейчас может отправиться повторно; надежный
+webhook retry/deduplication выделен в отдельную следующую задачу.
 
 ## Идемпотентность
 
