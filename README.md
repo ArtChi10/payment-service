@@ -63,8 +63,31 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
 3. Фоновый outbox publisher читает неопубликованные события и публикует `payments.new`.
 4. Consumer получает `payments.new`, эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%.
 5. Consumer обновляет статус платежа на `succeeded` или `failed`.
-6. Consumer отправляет webhook. Ошибки обрабатываются retry до 3 попыток с задержкой `1, 2, 4` секунды.
-7. После 3 неудачных попыток сообщение публикуется в `payments.dlq`.
+6. Consumer отправляет webhook. Ошибки маршрутизируются в retry queue до 3 попыток
+   с задержкой `1, 2` секунды между попытками.
+7. После 3 неудачной попытки consumer отклоняет исходное сообщение без requeue, и RabbitMQ
+   маршрутизирует его в DLQ через dead-letter exchange.
+
+## RabbitMQ topology
+
+Consumer явно объявляет durable topology:
+
+- main exchange: `payments`
+- main queue: `payments.new`
+- main routing key: `payments.new`
+- retry exchange: `payments.retry`
+- retry queue: `payments.retry`
+- retry routing key: `payments.retry`
+- dead-letter exchange: `payments.dlx`
+- DLQ queue: `payments.dlq`
+- DLQ routing key: `payments.dlq`
+
+Очередь `payments.new` объявлена с аргументами `x-dead-letter-exchange=payments.dlx`
+и `x-dead-letter-routing-key=payments.dlq`. При промежуточной ошибке handler публикует
+следующую попытку в `payments.retry`; retry queue после expiration dead-letter-ит сообщение
+обратно в exchange `payments` с routing key `payments.new`. Если обработка падает на 3-й
+попытке, handler делает `reject(requeue=False)`, после чего RabbitMQ перекладывает сообщение
+в durable очередь `payments.dlq`.
 
 ## Идемпотентность
 
