@@ -1,3 +1,5 @@
+import logging
+
 from app.messaging.broker import PAYMENTS_EXCHANGE
 from app.models.enums import OutboxStatus
 from app.models.outbox import OutboxEvent
@@ -118,3 +120,31 @@ async def test_outbox_does_not_retry_failed_event_after_attempt_limit(session_fa
     assert broker.messages == []
     assert stored.status == OutboxStatus.FAILED
     assert stored.attempts == 3
+
+
+async def test_outbox_logs_when_event_reaches_attempt_limit(session_factory, caplog):
+    async with session_factory() as session, session.begin():
+        event = OutboxEvent(
+            event_type="payments.new",
+            routing_key="payments.new",
+            payload={"payment_id": "00000000-0000-0000-0000-000000000001", "attempt": 1},
+            status=OutboxStatus.FAILED,
+            attempts=2,
+        )
+        session.add(event)
+
+    broker = FakeBroker(should_fail=True)
+    with caplog.at_level(logging.ERROR):
+        published = await OutboxPublisher(
+            session_factory,
+            broker,
+            max_publish_attempts=3,
+        ).publish_pending()
+
+    async with session_factory() as session:
+        stored = await session.get(OutboxEvent, event.id)
+
+    assert published == 0
+    assert stored.status == OutboxStatus.FAILED
+    assert stored.attempts == 3
+    assert any("reached max publish attempts (3)" in message for message in caplog.messages)

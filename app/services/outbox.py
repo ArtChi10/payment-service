@@ -68,6 +68,13 @@ class OutboxPublisher:
         async with self.session_factory() as session, session.begin():
             repository = OutboxRepository(session)
             await repository.mark_failed(event_id)
+            event = await repository.get_by_id(event_id)
+            if event is not None and event.attempts >= self.max_publish_attempts:
+                logger.error(
+                    "Outbox event %s reached max publish attempts (%s)",
+                    event.id,
+                    self.max_publish_attempts,
+                )
 
 
 async def run_outbox_loop(publisher: OutboxPublisher) -> None:

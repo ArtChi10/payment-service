@@ -21,6 +21,9 @@ docker compose up --build
 API будет доступен на `http://localhost:8000`, RabbitMQ management UI на
 `http://localhost:15672` (`guest` / `guest`).
 
+`/health` — простой liveness endpoint. `/ready` проверяет готовность зависимостей:
+соединение с PostgreSQL и подключение к RabbitMQ.
+
 ## API
 
 Создать платеж:
@@ -127,6 +130,10 @@ RabbitMQ retry/DLQ flow.
 текущей версии; production-вариант обычно выносит webhook delivery в отдельную outbox/queue
 с собственным budget и дедупликацией.
 
+Layered retry оставлен намеренно: HTTP retry закрывает короткие сетевые сбои webhook endpoint,
+а RabbitMQ message retry закрывает ошибки обработки, маршрутизации и окончательные падения
+webhook delivery.
+
 ## Идемпотентность
 
 `payments.idempotency_key` уникален. Повторный `POST` с тем же `Idempotency-Key`
@@ -168,25 +175,40 @@ pytest
 docker compose config
 ```
 
-Опциональная интеграционная проверка с PostgreSQL, RabbitMQ, API и consumer:
+Docker runtime check:
 
 ```bash
-docker compose up --build
+docker compose up --build -d
+curl http://localhost:8000/health
+curl http://localhost:8000/ready
+docker compose ps
 ```
+
+RabbitMQ/DLQ integration check требует запущенный RabbitMQ. При поднятом `docker compose`
+можно выполнить:
+
+```bash
+$env:RUN_RABBITMQ_INTEGRATION = "1"
+pytest -m integration
+```
+
+Обычный `pytest` не требует Docker: integration test пропускается без
+`RUN_RABBITMQ_INTEGRATION=1`.
 
 Manual integration checklist:
 
 1. Запустить `docker compose up --build`.
 2. Проверить API: `curl http://localhost:8000/health`.
-3. Создать платеж через пример `POST /api/v1/payments`.
-4. Открыть RabbitMQ UI: `http://localhost:15672` (`guest` / `guest`).
-5. Проверить, что существуют `payments.new`, `payments.retry`, `payments.dlq`.
-6. Для DLQ-сценария искусственно сломать обработку или webhook и убедиться, что после
+3. Проверить readiness: `curl http://localhost:8000/ready`.
+4. Создать платеж через пример `POST /api/v1/payments`.
+5. Открыть RabbitMQ UI: `http://localhost:15672` (`guest` / `guest`).
+6. Проверить, что существуют `payments.new`, `payments.retry`, `payments.dlq`.
+7. Для DLQ-сценария искусственно сломать обработку или webhook и убедиться, что после
    исчерпания message attempts сообщение попадает в `payments.dlq`.
 
-Автоматический integration test с настоящими PostgreSQL и RabbitMQ в этом репозитории не
-запускается по умолчанию, потому что требует внешних Docker-сервисов; сценарий выше
-оставлен как manual/optional проверка.
+RabbitMQ/DLQ integration test есть в `tests/test_rabbitmq_integration.py`, но не
+запускается по умолчанию, потому что требует внешний RabbitMQ. Полный сценарий с API,
+PostgreSQL, RabbitMQ и consumer оставлен как manual Docker-check выше.
 
 ## Operational notes
 
@@ -203,3 +225,14 @@ ORDER BY created_at;
 Такие события нужно расследовать по логам и состоянию RabbitMQ. Повторная отправка может
 быть оформлена отдельной maintenance-командой в будущем; сейчас автоматический retry
 ограничен, чтобы бесконечно не гонять неисправные события.
+
+Ручной recovery-сценарий: проверить причину ошибки, убедиться, что RabbitMQ доступен, затем
+вернуть конкретное событие в retryable состояние SQL-операцией наподобие:
+
+```sql
+UPDATE outbox
+SET status = 'failed', attempts = 0
+WHERE id = '<event-id>';
+```
+
+После этого outbox publisher снова подхватит событие.

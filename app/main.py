@@ -1,7 +1,8 @@
 import asyncio
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
+from sqlalchemy import text
 
 from app.api.v1.router import router as api_router
 from app.core.config import settings
@@ -33,3 +34,23 @@ app.include_router(api_router)
 @app.get("/health", tags=["health"])
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready", tags=["health"])
+async def ready() -> dict[str, str]:
+    try:
+        async with async_session_factory() as session:
+            await session.execute(text("SELECT 1"))
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "not_ready", "database": str(exc)},
+        ) from exc
+
+    if not await broker.ping(timeout=2):
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"status": "not_ready", "rabbitmq": "unavailable"},
+        )
+
+    return {"status": "ready", "database": "ok", "rabbitmq": "ok"}
