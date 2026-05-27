@@ -24,8 +24,7 @@ def test_payments_topology_contract() -> None:
     assert broker_module.PAYMENTS_RETRY_QUEUE.routing() == "payments.retry"
     assert broker_module.PAYMENTS_RETRY_QUEUE.arguments["x-dead-letter-exchange"] == "payments"
     assert (
-        broker_module.PAYMENTS_RETRY_QUEUE.arguments["x-dead-letter-routing-key"]
-        == "payments.new"
+        broker_module.PAYMENTS_RETRY_QUEUE.arguments["x-dead-letter-routing-key"] == "payments.new"
     )
 
     assert broker_module.PAYMENTS_DLX.name == "payments.dlx"

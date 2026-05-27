@@ -142,3 +142,20 @@ pytest
 ruff check .
 ruff format .
 ```
+
+## Quality checks
+
+Перед сдачей полезно прогнать:
+
+```bash
+ruff check .
+ruff format --check .
+pytest
+docker compose config
+```
+
+Опциональная интеграционная проверка с PostgreSQL, RabbitMQ, API и consumer:
+
+```bash
+docker compose up --build
+```

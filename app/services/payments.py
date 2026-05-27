@@ -1,3 +1,4 @@
+import asyncio
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,6 +11,9 @@ from app.models.payment import Payment
 from app.repositories.outbox import OutboxRepository
 from app.repositories.payments import PaymentRepository
 from app.schemas.payments import PaymentCreate
+
+IDEMPOTENCY_CONFLICT_LOOKUP_ATTEMPTS = 10
+IDEMPOTENCY_CONFLICT_LOOKUP_DELAY_SECONDS = 0.01
 
 
 class PaymentService:
@@ -48,9 +52,11 @@ class PaymentService:
                 return payment
         except IntegrityError:
             await self.session.rollback()
-            existing = await self.payments.get_by_idempotency_key(idempotency_key)
-            if existing:
-                return existing
+            for _ in range(IDEMPOTENCY_CONFLICT_LOOKUP_ATTEMPTS):
+                existing = await self.payments.get_by_idempotency_key(idempotency_key)
+                if existing:
+                    return existing
+                await asyncio.sleep(IDEMPOTENCY_CONFLICT_LOOKUP_DELAY_SECONDS)
             raise
 
     async def get_payment(self, payment_id: UUID) -> Payment | None:
