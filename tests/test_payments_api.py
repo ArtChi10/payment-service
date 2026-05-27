@@ -1,11 +1,13 @@
 import asyncio
 from collections.abc import AsyncIterator
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
 from app.db.base import Base
 from app.db.session import get_session
 from app.main import app
+from app.models.enums import Currency, PaymentStatus
 from app.models.outbox import OutboxEvent
 from app.models.payment import Payment
 from httpx import ASGITransport, AsyncClient
@@ -103,6 +105,29 @@ async def test_get_missing_payment_returns_404():
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Payment not found"
+
+
+async def test_get_payment_hides_internal_processing_status(session_factory):
+    async with session_factory() as session, session.begin():
+        payment = Payment(
+            amount=Decimal("42.00"),
+            currency=Currency.USD,
+            description="Processing order",
+            metadata_={"source": "test"},
+            status=PaymentStatus.PROCESSING,
+            idempotency_key="api-processing-status",
+            webhook_url="https://example.com/webhook",
+        )
+        session.add(payment)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.get(
+            f"/api/v1/payments/{payment.id}",
+            headers={"X-API-Key": "change-me"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
 
 
 @pytest.mark.parametrize(

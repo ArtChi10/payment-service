@@ -15,7 +15,9 @@ class Settings(BaseSettings):
 
     payment_gateway_min_delay_seconds: float = 2.0
     payment_gateway_max_delay_seconds: float = 5.0
+    payment_processing_lease_seconds: float = 60.0
     webhook_timeout_seconds: float = 5.0
+    webhook_delivery_lease_seconds: float = 60.0
     max_retry_attempts: int = 3
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")

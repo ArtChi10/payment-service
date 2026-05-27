@@ -56,3 +56,17 @@ class Payment(Base):
         nullable=False,
     )
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    processing_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    processing_attempts: Mapped[int] = mapped_column(
+        Integer,
+        default=0,
+        server_default="0",
+        nullable=False,
+    )
+    webhook_sending_started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )

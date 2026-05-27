@@ -1,10 +1,11 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.enums import PaymentStatus
 from app.models.outbox import OutboxEvent
 from app.models.payment import Payment
@@ -63,7 +64,12 @@ class PaymentService:
         return await self.payments.get_by_id(payment_id)
 
     async def claim_for_processing(self, payment_id: UUID) -> Payment | None:
-        return await self.payments.claim_for_processing(payment_id)
+        now = datetime.now(UTC)
+        return await self.payments.claim_for_processing(
+            payment_id,
+            now=now,
+            lease_expired_before=now - timedelta(seconds=settings.payment_processing_lease_seconds),
+        )
 
     async def release_processing_claim(self, payment_id: UUID) -> None:
         await self.payments.release_processing_claim(payment_id)
@@ -83,7 +89,12 @@ class PaymentService:
         return payment
 
     async def claim_webhook_delivery(self, payment_id: UUID) -> Payment | None:
-        return await self.payments.claim_webhook_delivery(payment_id)
+        now = datetime.now(UTC)
+        return await self.payments.claim_webhook_delivery(
+            payment_id,
+            now=now,
+            lease_expired_before=now - timedelta(seconds=settings.webhook_delivery_lease_seconds),
+        )
 
     async def mark_webhook_delivered(self, payment_id: UUID, attempts: int) -> None:
         await self.payments.mark_webhook_delivered(payment_id, attempts, datetime.now(UTC))

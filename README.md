@@ -71,10 +71,12 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
    помечает успешные события как `published`.
 4. Consumer получает `payments.new` и короткой атомарной DB-операцией переводит платеж
    из `pending` в `processing`. Duplicate-события для того же платежа не получают claim
-   и не вызывают gateway повторно.
+   и не вызывают gateway повторно. Если старый `processing` claim протух по lease timeout,
+   следующее сообщение может забрать его заново.
 5. Consumer эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%, затем отдельной
    короткой транзакцией фиксирует `succeeded` или `failed` и `processed_at`.
-6. Consumer атомарно claim-ит webhook delivery через `webhook_status=sending`.
+6. Consumer атомарно claim-ит webhook delivery через `webhook_status=sending`; stale
+   `sending` claim тоже может быть восстановлен повторным сообщением.
 7. Consumer отправляет webhook через `WebhookService.send_with_retry`: HTTP-доставка имеет
    собственные 3 попытки с экспоненциальной задержкой.
 8. Если gateway processing или webhook retry окончательно падает, ошибка попадает в общий
@@ -122,6 +124,23 @@ Outbox реализован как at-least-once delivery:
 доменном уровне: gateway processing claim-ится атомарно, а webhook delivery имеет отдельный
 статус и idempotency key.
 
+## Claim leases and recovery
+
+Внутренние состояния `processing` и `sending` не являются вечными lock'ами. При claim сервис
+записывает timestamp:
+
+- `processing_started_at` и `processing_attempts` для gateway processing;
+- `webhook_sending_started_at` для webhook delivery.
+
+Если consumer падает после claim, но до финального статуса, повторное RabbitMQ-сообщение
+сможет восстановить работу после lease timeout. Значения по умолчанию:
+`payment_processing_lease_seconds=60` и `webhook_delivery_lease_seconds=60`.
+
+Активный non-expired claim не приводит к повторному внешнему вызову. Stale `processing`
+может быть снова переведен в `processing` атомарным `UPDATE ... WHERE`, после чего gateway
+будет вызван заново. Stale `sending` может быть снова claim-нут и повторить webhook delivery.
+Timestamps не очищаются после финального статуса и остаются как audit-информация.
+
 ## Webhook retry
 
 Webhook delivery отделен от RabbitMQ message retry. `WebhookService.send_with_retry`
@@ -163,6 +182,10 @@ Consumer защищает gateway от duplicate `payments.new`: только о
 что платеж уже claim-нут или обработан, и не вызывают внешний gateway. Успешно доставленный
 webhook повторно не отправляется; pending/failed delivery claim-ится отдельно через
 `webhook_status=sending`.
+
+`processing` — внутренний статус consumer claim-а. Во внешнем `GET /api/v1/payments/{id}`
+он скрывается как `pending`, чтобы публичный контракт оставался `pending`, `succeeded`,
+`failed`.
 
 При конкурентном создании второй запрос может столкнуться с unique constraint и после
 rollback повторно прочитать уже созданный платеж. Для production-grade PostgreSQL лучше

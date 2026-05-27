@@ -26,15 +26,35 @@ class PaymentRepository:
         await self.session.flush()
         return payment
 
-    async def claim_for_processing(self, payment_id: UUID) -> Payment | None:
+    async def claim_for_processing(
+        self,
+        payment_id: UUID,
+        *,
+        now: datetime,
+        lease_expired_before: datetime,
+    ) -> Payment | None:
         result = await self.session.execute(
             update(Payment)
             .where(
                 Payment.id == payment_id,
                 Payment.processed_at.is_(None),
-                Payment.status == PaymentStatus.PENDING,
+                or_(
+                    Payment.status == PaymentStatus.PENDING,
+                    (
+                        (Payment.status == PaymentStatus.PROCESSING)
+                        & (
+                            Payment.processing_started_at.is_(None)
+                            | (Payment.processing_started_at < lease_expired_before)
+                        )
+                    ),
+                ),
             )
-            .values(status=PaymentStatus.PROCESSING)
+            .values(
+                status=PaymentStatus.PROCESSING,
+                processing_started_at=now,
+                processing_attempts=Payment.processing_attempts + 1,
+            )
+            .execution_options(synchronize_session=False)
             .returning(Payment),
         )
         return result.scalar_one_or_none()
@@ -47,7 +67,8 @@ class PaymentRepository:
                 Payment.processed_at.is_(None),
                 Payment.status == PaymentStatus.PROCESSING,
             )
-            .values(status=PaymentStatus.PENDING),
+            .values(status=PaymentStatus.PENDING)
+            .execution_options(synchronize_session=False),
         )
 
     async def mark_processed(self, payment_id: UUID, status: PaymentStatus) -> Payment | None:
@@ -55,19 +76,39 @@ class PaymentRepository:
             update(Payment)
             .where(Payment.id == payment_id)
             .values(status=status)
+            .execution_options(synchronize_session=False)
             .returning(Payment),
         )
         return result.scalar_one_or_none()
 
-    async def claim_webhook_delivery(self, payment_id: UUID) -> Payment | None:
+    async def claim_webhook_delivery(
+        self,
+        payment_id: UUID,
+        *,
+        now: datetime,
+        lease_expired_before: datetime,
+    ) -> Payment | None:
         result = await self.session.execute(
             update(Payment)
             .where(
                 Payment.id == payment_id,
                 Payment.processed_at.is_not(None),
-                Payment.webhook_status.in_((WebhookStatus.PENDING, WebhookStatus.FAILED)),
+                or_(
+                    Payment.webhook_status.in_((WebhookStatus.PENDING, WebhookStatus.FAILED)),
+                    (
+                        (Payment.webhook_status == WebhookStatus.SENDING)
+                        & (
+                            Payment.webhook_sending_started_at.is_(None)
+                            | (Payment.webhook_sending_started_at < lease_expired_before)
+                        )
+                    ),
+                ),
             )
-            .values(webhook_status=WebhookStatus.SENDING)
+            .values(
+                webhook_status=WebhookStatus.SENDING,
+                webhook_sending_started_at=now,
+            )
+            .execution_options(synchronize_session=False)
             .returning(Payment),
         )
         return result.scalar_one_or_none()
@@ -87,6 +128,7 @@ class PaymentRepository:
                 webhook_attempts=Payment.webhook_attempts + attempts,
                 webhook_last_error=None,
             )
+            .execution_options(synchronize_session=False)
             .returning(Payment),
         )
         return result.scalar_one_or_none()
@@ -105,6 +147,7 @@ class PaymentRepository:
                 webhook_attempts=Payment.webhook_attempts + attempts,
                 webhook_last_error=error,
             )
+            .execution_options(synchronize_session=False)
             .returning(Payment),
         )
         return result.scalar_one_or_none()
