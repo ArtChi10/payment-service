@@ -1,6 +1,6 @@
 import asyncio
 from datetime import UTC, datetime, timedelta
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -30,13 +30,16 @@ class PaymentService:
                 if existing:
                     return existing
 
+                payment_id = uuid4()
                 payment = Payment(
+                    id=payment_id,
                     amount=data.amount,
                     currency=data.currency,
                     description=data.description,
                     metadata_=data.metadata,
                     status=PaymentStatus.PENDING,
                     idempotency_key=idempotency_key,
+                    gateway_operation_id=f"gateway:{payment_id}",
                     webhook_url=str(data.webhook_url),
                 )
                 await self.payments.add(payment)

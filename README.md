@@ -74,7 +74,8 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
    и не вызывают gateway повторно. Если старый `processing` claim протух по lease timeout,
    следующее сообщение может забрать его заново.
 5. Consumer эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%, затем отдельной
-   короткой транзакцией фиксирует `succeeded` или `failed` и `processed_at`.
+   короткой транзакцией фиксирует `succeeded` или `failed` и `processed_at`. Во внешний
+   gateway передается стабильный `gateway_operation_id`.
 6. Consumer атомарно claim-ит webhook delivery через `webhook_status=sending`; stale
    `sending` claim тоже может быть восстановлен повторным сообщением.
 7. Consumer отправляет webhook через `WebhookService.send_with_retry`: HTTP-доставка имеет
@@ -140,6 +141,23 @@ Outbox реализован как at-least-once delivery:
 может быть снова переведен в `processing` атомарным `UPDATE ... WHERE`, после чего gateway
 будет вызван заново. Stale `sending` может быть снова claim-нут и повторить webhook delivery.
 Timestamps не очищаются после финального статуса и остаются как audit-информация.
+
+## Gateway idempotency
+
+Сервис не делает distributed transaction между локальной БД и внешним payment gateway.
+Если consumer успешно вызвал gateway, но упал до записи `processed_at` и финального
+payment status, локальная запись останется в `processing`. После lease timeout повторное
+сообщение восстановит обработку и может снова вызвать gateway.
+
+Чтобы такая recovery-семантика была безопасной для реального PSP/gateway, каждый платеж
+имеет стабильный `gateway_operation_id` вида `gateway:<payment_id>`. Он создается до
+первого gateway call и не меняется. Любой повторный вызов gateway после stale lease recovery
+передает тот же operation id. Реальный gateway должен использовать его как idempotency
+key / operation id и дедуплицировать повторные операции.
+
+Это честная at-least-once модель: локальный сервис допускает повторный внешний вызов после
+crash recovery, но делает его с тем же idempotency key. Exactly-once между gateway и БД
+не обещается.
 
 ## Webhook retry
 

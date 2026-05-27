@@ -63,7 +63,7 @@ async def process_payment(payment_id: UUID) -> None:
 
         if should_process:
             try:
-                status = await gateway.process(payment)
+                status = await gateway.process(payment, payment.gateway_operation_id)
             except Exception:
                 async with session.begin():
                     await PaymentService(session).release_processing_claim(payment_id)

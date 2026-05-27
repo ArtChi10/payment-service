@@ -22,4 +22,6 @@ async def test_create_payment_is_idempotent(session):
     events = result.scalars().all()
 
     assert second.id == first.id
+    assert first.gateway_operation_id == f"gateway:{first.id}"
+    assert second.gateway_operation_id == first.gateway_operation_id
     assert len(events) == 1

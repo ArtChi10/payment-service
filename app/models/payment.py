@@ -32,6 +32,12 @@ class Payment(Base):
         nullable=False,
     )
     idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    gateway_operation_id: Mapped[str] = mapped_column(
+        String(255),
+        default=lambda: f"gateway:{uuid4()}",
+        unique=True,
+        index=True,
+    )
     webhook_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     webhook_status: Mapped[WebhookStatus] = mapped_column(
         Enum(WebhookStatus, native_enum=False, length=16),

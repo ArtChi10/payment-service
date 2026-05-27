@@ -31,8 +31,8 @@ async def test_processed_payment_does_not_call_gateway_again(
     webhook_direct_calls = []
 
     class FakeGateway:
-        async def process(self, payment: Payment) -> PaymentStatus:
-            gateway_calls.append(payment.id)
+        async def process(self, payment: Payment, operation_id: str) -> PaymentStatus:
+            gateway_calls.append((payment.id, operation_id))
             return PaymentStatus.SUCCEEDED
 
     class FakeWebhook:
@@ -77,8 +77,8 @@ async def test_parallel_duplicate_events_call_gateway_once(
     webhook_calls = []
 
     class FakeGateway:
-        async def process(self, payment: Payment) -> PaymentStatus:
-            gateway_calls.append(payment.id)
+        async def process(self, payment: Payment, operation_id: str) -> PaymentStatus:
+            gateway_calls.append((payment.id, operation_id))
             await asyncio.sleep(0.05)
             return PaymentStatus.SUCCEEDED
 
@@ -99,7 +99,7 @@ async def test_parallel_duplicate_events_call_gateway_once(
     async with session_factory() as session:
         stored = await session.get(Payment, payment.id)
 
-    assert gateway_calls == [payment.id]
+    assert gateway_calls == [(payment.id, payment.gateway_operation_id)]
     assert len(webhook_calls) == 1
     assert stored.status == PaymentStatus.SUCCEEDED
     assert stored.processed_at is not None
@@ -130,8 +130,8 @@ async def test_active_processing_lease_does_not_call_gateway(
     gateway_calls = []
 
     class FakeGateway:
-        async def process(self, payment: Payment) -> PaymentStatus:
-            gateway_calls.append(payment.id)
+        async def process(self, payment: Payment, operation_id: str) -> PaymentStatus:
+            gateway_calls.append((payment.id, operation_id))
             return PaymentStatus.SUCCEEDED
 
     monkeypatch.setattr(handlers, "async_session_factory", session_factory)
@@ -170,8 +170,8 @@ async def test_stale_processing_lease_allows_gateway_retry(
     webhook_calls = []
 
     class FakeGateway:
-        async def process(self, payment: Payment) -> PaymentStatus:
-            gateway_calls.append(payment.id)
+        async def process(self, payment: Payment, operation_id: str) -> PaymentStatus:
+            gateway_calls.append((payment.id, operation_id))
             return PaymentStatus.SUCCEEDED
 
     class FakeWebhook:
@@ -188,7 +188,7 @@ async def test_stale_processing_lease_allows_gateway_retry(
     async with session_factory() as session:
         stored = await session.get(Payment, payment.id)
 
-    assert gateway_calls == [payment.id]
+    assert gateway_calls == [(payment.id, payment.gateway_operation_id)]
     assert len(webhook_calls) == 1
     assert stored.status == PaymentStatus.SUCCEEDED
     assert stored.processing_attempts == 2
@@ -220,8 +220,8 @@ async def test_delivered_webhook_is_not_sent_again(
     webhook_calls = []
 
     class FakeGateway:
-        async def process(self, payment: Payment) -> PaymentStatus:
-            gateway_calls.append(payment.id)
+        async def process(self, payment: Payment, operation_id: str) -> PaymentStatus:
+            gateway_calls.append((payment.id, operation_id))
             return PaymentStatus.SUCCEEDED
 
     class FakeWebhook:
