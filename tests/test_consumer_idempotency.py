@@ -25,7 +25,8 @@ async def test_processed_payment_does_not_call_gateway_again(
         session.add(payment)
 
     gateway_calls = []
-    webhook_calls = []
+    webhook_retry_calls = []
+    webhook_direct_calls = []
 
     class FakeGateway:
         async def process(self, payment: Payment) -> PaymentStatus:
@@ -34,7 +35,10 @@ async def test_processed_payment_does_not_call_gateway_again(
 
     class FakeWebhook:
         async def send(self, url: str, payload: dict) -> None:
-            webhook_calls.append((url, payload))
+            webhook_direct_calls.append((url, payload))
+
+        async def send_with_retry(self, url: str, payload: dict) -> None:
+            webhook_retry_calls.append((url, payload))
 
     monkeypatch.setattr(handlers, "async_session_factory", session_factory)
     monkeypatch.setattr(handlers, "PaymentGateway", FakeGateway)
@@ -43,7 +47,8 @@ async def test_processed_payment_does_not_call_gateway_again(
     await handlers.process_payment(payment.id)
 
     assert gateway_calls == []
-    assert len(webhook_calls) == 1
-    assert webhook_calls[0][0] == "https://example.com/webhook"
-    assert webhook_calls[0][1]["payment_id"] == str(payment.id)
-    assert webhook_calls[0][1]["status"] == "succeeded"
+    assert webhook_direct_calls == []
+    assert len(webhook_retry_calls) == 1
+    assert webhook_retry_calls[0][0] == "https://example.com/webhook"
+    assert webhook_retry_calls[0][1]["payment_id"] == str(payment.id)
+    assert webhook_retry_calls[0][1]["status"] == "succeeded"

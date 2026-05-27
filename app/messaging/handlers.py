@@ -67,4 +67,4 @@ async def process_payment(payment_id: UUID) -> None:
             status=PaymentStatus(payment.status),
             processed_at=payment.processed_at,
         ).model_dump(mode="json")
-        await webhook.send(payment.webhook_url, webhook_payload)
+        await webhook.send_with_retry(payment.webhook_url, webhook_payload)

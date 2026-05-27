@@ -65,10 +65,12 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
    помечает успешные события как `published`.
 4. Consumer получает `payments.new`, эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%.
 5. Consumer обновляет статус платежа на `succeeded` или `failed`.
-6. Consumer отправляет webhook. Ошибки маршрутизируются в retry queue до 3 попыток
-   с задержкой `1, 2` секунды между попытками.
-7. После 3 неудачной попытки consumer отклоняет исходное сообщение без requeue, и RabbitMQ
-   маршрутизирует его в DLQ через dead-letter exchange.
+6. Consumer отправляет webhook через `WebhookService.send_with_retry`: HTTP-доставка имеет
+   собственные 3 попытки с экспоненциальной задержкой.
+7. Если gateway processing или webhook retry окончательно падает, ошибка попадает в общий
+   RabbitMQ message retry flow.
+8. После 3 неудачной попытки обработки сообщения consumer отклоняет исходное сообщение без
+   requeue, и RabbitMQ маршрутизирует его в DLQ через dead-letter exchange.
 
 ## RabbitMQ topology
 
@@ -106,7 +108,15 @@ Outbox реализован как at-least-once delivery:
 `published`, событие может быть опубликовано повторно. Consumer поэтому должен быть
 идемпотентным: если `payment.processed_at` уже заполнен, gateway processing повторно не
 запускается. Webhook на повторном `payments.new` сейчас может отправиться повторно; надежный
-webhook retry/deduplication выделен в отдельную следующую задачу.
+webhook deduplication может быть улучшен отдельной следующей задачей.
+
+## Webhook retry
+
+Webhook delivery отделен от RabbitMQ message retry. `WebhookService.send_with_retry`
+выполняет до 3 HTTP-попыток и использует экспоненциальную задержку `1, 2` секунды между
+ними. Неуспешные попытки логируются. Если webhook не доставлен после всех попыток,
+`WebhookDeliveryError` пробрасывается наружу, и consumer передает ошибку в общий
+RabbitMQ retry/DLQ flow.
 
 ## Идемпотентность
 
