@@ -62,8 +62,31 @@ class PaymentService:
     async def get_payment(self, payment_id: UUID) -> Payment | None:
         return await self.payments.get_by_id(payment_id)
 
+    async def claim_for_processing(self, payment_id: UUID) -> Payment | None:
+        return await self.payments.claim_for_processing(payment_id)
+
+    async def release_processing_claim(self, payment_id: UUID) -> None:
+        await self.payments.release_processing_claim(payment_id)
+
     async def mark_processed(self, payment: Payment, status: PaymentStatus) -> Payment:
         payment.status = status
         payment.processed_at = datetime.now(UTC)
         await self.session.flush()
         return payment
+
+    async def mark_processed_by_id(self, payment_id: UUID, status: PaymentStatus) -> Payment:
+        payment = await self.payments.mark_processed(payment_id, status)
+        if payment is None:
+            raise LookupError(f"Payment {payment_id} not found")
+        payment.processed_at = datetime.now(UTC)
+        await self.session.flush()
+        return payment
+
+    async def claim_webhook_delivery(self, payment_id: UUID) -> Payment | None:
+        return await self.payments.claim_webhook_delivery(payment_id)
+
+    async def mark_webhook_delivered(self, payment_id: UUID, attempts: int) -> None:
+        await self.payments.mark_webhook_delivered(payment_id, attempts, datetime.now(UTC))
+
+    async def mark_webhook_failed(self, payment_id: UUID, attempts: int, error: str) -> None:
+        await self.payments.mark_webhook_failed(payment_id, attempts, error[:4000])

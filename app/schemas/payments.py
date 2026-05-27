@@ -4,7 +4,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
-from app.models.enums import Currency, PaymentStatus
+from app.models.enums import Currency, PaymentStatus, WebhookStatus
 from app.models.payment import Payment
 
 
@@ -31,6 +31,10 @@ class PaymentDetail(BaseModel):
     status: PaymentStatus
     idempotency_key: str
     webhook_url: str
+    webhook_status: WebhookStatus
+    webhook_delivered_at: datetime | None
+    webhook_attempts: int
+    webhook_last_error: str | None
     created_at: datetime
     processed_at: datetime | None
 
@@ -47,6 +51,10 @@ class PaymentDetail(BaseModel):
             status=payment.status,
             idempotency_key=payment.idempotency_key,
             webhook_url=payment.webhook_url,
+            webhook_status=payment.webhook_status,
+            webhook_delivered_at=payment.webhook_delivered_at,
+            webhook_attempts=payment.webhook_attempts,
+            webhook_last_error=payment.webhook_last_error,
             created_at=payment.created_at,
             processed_at=payment.processed_at,
         )
@@ -59,5 +67,6 @@ class PaymentEvent(BaseModel):
 
 class PaymentWebhookPayload(BaseModel):
     payment_id: UUID
+    delivery_id: str
     status: PaymentStatus
     processed_at: datetime

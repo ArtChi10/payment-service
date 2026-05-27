@@ -9,7 +9,15 @@ class Currency(StrEnum):
 
 class PaymentStatus(StrEnum):
     PENDING = "pending"
+    PROCESSING = "processing"
     SUCCEEDED = "succeeded"
+    FAILED = "failed"
+
+
+class WebhookStatus(StrEnum):
+    PENDING = "pending"
+    SENDING = "sending"
+    DELIVERED = "delivered"
     FAILED = "failed"
 
 

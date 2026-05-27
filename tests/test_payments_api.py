@@ -86,6 +86,10 @@ async def test_create_and_get_payment():
     assert fetched.status_code == 200
     assert fetched.json()["status"] == "pending"
     assert fetched.json()["metadata"] == {"source": "test"}
+    assert fetched.json()["webhook_status"] == "pending"
+    assert fetched.json()["webhook_delivered_at"] is None
+    assert fetched.json()["webhook_attempts"] == 0
+    assert fetched.json()["webhook_last_error"] is None
 
 
 async def test_get_missing_payment_returns_404():

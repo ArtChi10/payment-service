@@ -59,6 +59,9 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
   -H "X-API-Key: change-me"
 ```
 
+Ответ содержит платежный статус и поля webhook delivery: `webhook_status`,
+`webhook_attempts`, `webhook_delivered_at`, `webhook_last_error`.
+
 ## Поток обработки
 
 1. `POST /api/v1/payments` требует `X-API-Key` и `Idempotency-Key`.
@@ -66,13 +69,17 @@ curl http://localhost:8000/api/v1/payments/4e2a3e10-0d36-4d76-bb7f-d85e1de3275a 
 3. Фоновый outbox publisher короткой транзакцией выбирает `pending`/retryable `failed`
    события, публикует их в RabbitMQ вне DB-транзакции и отдельной короткой транзакцией
    помечает успешные события как `published`.
-4. Consumer получает `payments.new`, эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%.
-5. Consumer обновляет статус платежа на `succeeded` или `failed`.
-6. Consumer отправляет webhook через `WebhookService.send_with_retry`: HTTP-доставка имеет
+4. Consumer получает `payments.new` и короткой атомарной DB-операцией переводит платеж
+   из `pending` в `processing`. Duplicate-события для того же платежа не получают claim
+   и не вызывают gateway повторно.
+5. Consumer эмулирует gateway с задержкой 2-5 секунд и шансом успеха 90%, затем отдельной
+   короткой транзакцией фиксирует `succeeded` или `failed` и `processed_at`.
+6. Consumer атомарно claim-ит webhook delivery через `webhook_status=sending`.
+7. Consumer отправляет webhook через `WebhookService.send_with_retry`: HTTP-доставка имеет
    собственные 3 попытки с экспоненциальной задержкой.
-7. Если gateway processing или webhook retry окончательно падает, ошибка попадает в общий
+8. Если gateway processing или webhook retry окончательно падает, ошибка попадает в общий
    RabbitMQ message retry flow.
-8. После 3 неудачной попытки обработки сообщения consumer отклоняет исходное сообщение без
+9. После 3 неудачной попытки обработки сообщения consumer отклоняет исходное сообщение без
    requeue, и RabbitMQ маршрутизирует его в DLQ через dead-letter exchange.
 
 ## RabbitMQ topology
@@ -111,10 +118,9 @@ Outbox реализован как at-least-once delivery:
 - `failed` события с исчерпанными attempts остаются в БД и требуют ручного расследования/alerting.
 
 Гарантия не является exactly-once. Если publish прошел успешно, но сервис упал до отметки
-`published`, событие может быть опубликовано повторно. Consumer поэтому должен быть
-идемпотентным: если `payment.processed_at` уже заполнен, gateway processing повторно не
-запускается. Webhook на повторном `payments.new` сейчас может отправиться повторно; надежный
-webhook deduplication может быть улучшен отдельной следующей задачей.
+`published`, событие может быть опубликовано повторно. Consumer поэтому идемпотентен на
+доменном уровне: gateway processing claim-ится атомарно, а webhook delivery имеет отдельный
+статус и idempotency key.
 
 ## Webhook retry
 
@@ -123,6 +129,19 @@ Webhook delivery отделен от RabbitMQ message retry. `WebhookService.sen
 ними. Неуспешные попытки логируются. Если webhook не доставлен после всех попыток,
 `WebhookDeliveryError` пробрасывается наружу, и consumer передает ошибку в общий
 RabbitMQ retry/DLQ flow.
+
+Состояние webhook delivery хранится в `payments`:
+
+- `webhook_status`: `pending`, `sending`, `delivered`, `failed`;
+- `webhook_attempts`: суммарное число HTTP-попыток webhook delivery;
+- `webhook_delivered_at`: время успешной доставки;
+- `webhook_last_error`: последняя финальная ошибка доставки.
+
+Webhook payload содержит стабильный `delivery_id` вида `payment:<payment_id>:webhook`.
+Получатель webhook может дедуплицировать входящие уведомления по этому ключу. Если
+`webhook_status=delivered`, повторное `payments.new` завершается без HTTP-вызова. Если
+доставка упала, consumer сохраняет `failed`, attempts/error и пробрасывает ошибку в
+RabbitMQ retry flow; следующая message attempt может снова claim-ить delivery.
 
 Текущая семантика: webhook retry выполняется внутри каждой попытки обработки сообщения.
 Так как RabbitMQ message retry тоже делает до 3 попыток обработки, худший случай для
@@ -138,6 +157,12 @@ webhook delivery.
 
 `payments.idempotency_key` уникален. Повторный `POST` с тем же `Idempotency-Key`
 возвращает уже созданный платеж и не создает второе событие outbox.
+
+Consumer защищает gateway от duplicate `payments.new`: только один обработчик может
+атомарно перевести платеж из `pending` в `processing`. Остальные duplicate-события видят,
+что платеж уже claim-нут или обработан, и не вызывают внешний gateway. Успешно доставленный
+webhook повторно не отправляется; pending/failed delivery claim-ится отдельно через
+`webhook_status=sending`.
 
 При конкурентном создании второй запрос может столкнуться с unique constraint и после
 rollback повторно прочитать уже созданный платеж. Для production-grade PostgreSQL лучше
